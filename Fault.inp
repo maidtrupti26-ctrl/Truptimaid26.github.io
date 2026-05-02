@@ -1,0 +1,161 @@
+#include <WiFi.h>
+#include <WebServer.h>
+
+// WiFi credentials
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+WebServer server(80);
+
+// Pins
+#define VOLTAGE_PIN 34
+#define CURRENT_PIN 35
+#define LED_PIN 25
+
+float voltage = 0;
+float current = 0;
+String statusMsg = "NORMAL";
+
+// Read sensors
+void readSensors() {
+  int v_raw = analogRead(VOLTAGE_PIN);
+  int c_raw = analogRead(CURRENT_PIN);
+
+  float voltage_adc = v_raw * (3.3 / 4095.0);
+  float current_adc = c_raw * (3.3 / 4095.0);
+
+  voltage = voltage_adc * 5;  // adjust if needed
+  current = (current_adc - 2.5) / 0.185;
+
+  // Fault logic
+  if (voltage < 10 || current < 0.05) {
+    digitalWrite(LED_PIN, HIGH);
+    statusMsg = "FAULT DETECTED";
+  } else {
+    digitalWrite(LED_PIN, LOW);
+    statusMsg = "NORMAL";
+  }
+}
+
+// Send data (API)
+void handleData() {
+  readSensors();
+  String json = "{";
+  json += "\"voltage\":" + String(voltage) + ",";
+  json += "\"current\":" + String(current) + ",";
+  json += "\"status\":\"" + statusMsg + "\"";
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+// Webpage
+void handleRoot() {
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<title>Solar Monitoring</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<style>
+body {
+  font-family: Arial;
+  text-align: center;
+  background: linear-gradient(to right, #1e3c72, #2a5298);
+  color: white;
+}
+
+.card {
+  background: white;
+  color: black;
+  padding: 20px;
+  margin: 20px auto;
+  width: 250px;
+  border-radius: 15px;
+}
+
+.status {
+  font-size: 22px;
+  padding: 10px;
+  border-radius: 10px;
+  color: white;
+}
+
+.normal { background: green; }
+.fault { background: red; }
+</style>
+</head>
+
+<body>
+
+<h1>☀️ Solar Monitoring</h1>
+
+<div class="card">
+<p>Voltage</p>
+<p id="voltage">--</p>
+</div>
+
+<div class="card">
+<p>Current</p>
+<p id="current">--</p>
+</div>
+
+<div class="card">
+<p>Status</p>
+<p id="status" class="status normal">--</p>
+</div>
+
+<script>
+function updateData() {
+  fetch('/data')
+  .then(res => res.json())
+  .then(data => {
+    document.getElementById("voltage").innerHTML = data.voltage + " V";
+    document.getElementById("current").innerHTML = data.current + " A";
+
+    let s = document.getElementById("status");
+
+    if (data.status == "FAULT DETECTED") {
+      s.innerHTML = "FAULT DETECTED";
+      s.className = "status fault";
+    } else {
+      s.innerHTML = "NORMAL";
+      s.className = "status normal";
+    }
+  });
+}
+
+// update every 4 sec
+setInterval(updateData, 4000);
+</script>
+
+</body>
+</html>
+)rawliteral";
+
+  server.send(200, "text/html", html);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+
+  WiFi.begin(ssid, password);
+
+  Serial.print("Connecting...");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nConnected!");
+  Serial.println(WiFi.localIP());
+
+  server.on("/", handleRoot);
+  server.on("/data", handleData);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+}
